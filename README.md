@@ -1,4 +1,5 @@
 esp-remote-sensor-client
+
 This repository: https://github.com/pwboettcher/esp-remote-sensor-client
 
 This is the device-side code for a simple ESP8266 remote sensor system.
@@ -19,7 +20,8 @@ and add the names and password of any wifi networks you'd like the device
 to connect to.  You'll also need the name of the server that you will be
 sending measurements to.  I used [PythonAnywhere](https://pythonanywhere.com)
 as the hosting service for the server-side code (see the server-side 
-repository), so the server string is `username.pythonanywhere.com`.
+repository at https://github.com/pwboettcher/esp-remote-sensor-server),
+so the server string is `username.pythonanywhere.com`.
 
 COMPILING
 
