@@ -1,3 +1,8 @@
+/* 
+  This code is distributed under the terms of the MIT License (see the file LICENSE)
+
+  Copyright (c) 2021 Peter Boettcher
+*/
 
 //nodemcu pinout https://github.com/esp8266/Arduino/issues/584
 #include <ESP8266WiFi.h>
