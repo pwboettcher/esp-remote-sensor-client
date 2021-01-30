@@ -6,6 +6,10 @@
 #include <ArduinoJson.h>
 #include "HX711.h"
 
+// This were for an old version with that used DS18B20 Dallas Semiconductor
+// temperature sensors over OneWire.  The plan is to put these back into
+// this newer framework
+
 //#include <OneWire.h>
 //#include <DallasTemperature.h>
 
@@ -39,6 +43,8 @@ nw networks[] = { {"ssid1", "pw1"},
 */
 #include "networks.h"
 
+// Simple class to take in a bunch of samples
+// and compute an average
 struct Averager {
     double cur_val;
     double debug_arr[80];
@@ -57,6 +63,7 @@ struct Averager {
     }
 };
 
+// Base class for a sensor that hangs off of this ESP board
 struct Sensor {
     String name;
     String id;
@@ -89,6 +96,8 @@ struct Sensor {
     }
 };
 
+// Strain gauge interface.  This is sloppy... this
+// class just refers to the global HX711 interface
 struct Scale : public Sensor {
     Scale() : Sensor("strain") {}
 
@@ -106,6 +115,8 @@ struct Scale : public Sensor {
     }
 };
 
+// PIR interface.  Just a digital pin.  This needs
+// to be better-configurable
 struct PIR : public Sensor {
     PIR() : Sensor("pir") {}
 
@@ -135,22 +146,28 @@ void setup() {
     PIR *p = new PIR();
     sensors.push_back(p);
 
-  //DS18B20.begin();
-  //nSensors = DS18B20.getDS18Count();
+    //DS18B20.begin();
+    //nSensors = DS18B20.getDS18Count();
 
-  /*
-  Serial.println(String("found ") + String(nSensors) + " DS18B20 sensors:");
-  for(uint8_t i=0; i<nSensors; i++) {
-    bool ret = DS18B20.getAddress(addr[i], i);
-    if(ret)
-      Serial.println(String("addr: ") + genAddressString(addr[i]));
-    else
-      Serial.println("failure");
-  }
-  */
-  sayHello();
+    /*
+    Serial.println(String("found ") + String(nSensors) + " DS18B20 sensors:");
+    for(uint8_t i=0; i<nSensors; i++) {
+        bool ret = DS18B20.getAddress(addr[i], i);
+        if(ret)
+        Serial.println(String("addr: ") + genAddressString(addr[i]));
+        else
+        Serial.println("failure");
+    }
+    */
+
+    // connect with server and say hi
+    sayHello();
 }
 
+// over-the-air update... fetch a binfile from an internet server and
+// program.  right now, we then wait until the next schedule reset
+// to pick up the changes.  this should probably cause an immediate
+// reset
 void doOTAupdate()
 {
     WiFiClient client;
@@ -177,6 +194,7 @@ void doOTAupdate()
     }
 }
 
+// main loop
 int totalCount = 0;
 void loop() {
 
@@ -184,6 +202,8 @@ void loop() {
         s->DoMeasure();
     }
 
+    // read 60 times for averaging,
+    // then submit
     if(++cntReading >= 60) {
         cntReading = 0;
 
@@ -289,6 +309,8 @@ void sayHello()
     JsonObject sinfo = serverJson["data"];
     serializeJson(sinfo, Serial);
 
+    // The "hello" response includes the latest firmware version
+    // on the server, so we can decide whether to update
     int version = sinfo["fwversion"];
     Serial.println("Server has version " + String(version));
 
