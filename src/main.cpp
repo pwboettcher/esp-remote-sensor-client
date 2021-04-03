@@ -4,6 +4,8 @@
   Copyright (c) 2021 Peter Boettcher
 */
 
+#define DEVICE_DS18B20
+
 //nodemcu pinout https://github.com/esp8266/Arduino/issues/584
 #include <ESP8266WiFi.h>
 #include <ESP8266httpUpdate.h>
@@ -11,15 +13,17 @@
 #include <ArduinoJson.h>
 #include "HX711.h"
 
-// This were for an old version with that used DS18B20 Dallas Semiconductor
-// temperature sensors over OneWire.  The plan is to put these back into
-// this newer framework
+#ifdef DEVICE_DS18B20
+// DS18B20 Dallas Semiconductor temperature sensors over OneWire.
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
-//#include <OneWire.h>
-//#include <DallasTemperature.h>
+#define ONE_WIRE_BUS 2  // DS18B20 on arduino pin2 corresponds to D4 on physical board
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature DS18B20(&oneWire);
+#endif
 
-
-const int MY_VERSION = 11;
+const int MY_VERSION = 12;
 
 const int LOADCELL_DOUT_PIN = 4;
 const int LOADCELL_SCK_PIN = 0;
@@ -41,6 +45,7 @@ struct nw {
 /*
 In networks.h, put these definitions.  And don't check it into source control.
 
+const char * ssl_fingerprint = "AB CD 12 ...";
 const char* server = "something.somewhere.com";
 nw networks[] = { {"ssid1", "pw1"},
 		  {"ssid2", "pw2"},
@@ -51,6 +56,8 @@ nw networks[] = { {"ssid1", "pw1"},
 // Simple class to take in a bunch of samples
 // and compute an average
 struct Averager {
+    Averager() : cur_val(0.0), cnt(0) {}
+
     double cur_val;
     double debug_arr[80];
     int cnt;
@@ -120,6 +127,31 @@ struct Scale : public Sensor {
     }
 };
 
+String genAddressString(const DeviceAddress &addr) {
+    char str[18];
+    String ret;
+    for (int i = 0; i < 8; ++i) {
+        sprintf(str + 2 * i, "%.2x", addr[i]);
+    }
+    return String(str);
+}
+
+// Strain gauge interface.  This is sloppy... this
+// class just refers to the global HX711 interface
+struct Thermal : public Sensor {
+    Thermal(const DeviceAddress &_addr) : Sensor("thermal") {
+        memcpy(addr, _addr, sizeof(DeviceAddress));
+        id = genAddressString(addr);
+    }
+    DeviceAddress addr;
+
+    double get_cur_reading() override {
+        float temp = DS18B20.getTempF(addr);
+        Serial.println(temp);
+        return(static_cast<double>(temp));
+    }
+};
+
 // PIR interface.  Just a digital pin.  This needs
 // to be better-configurable
 struct PIR : public Sensor {
@@ -138,32 +170,40 @@ void setup() {
     Serial.begin(115200);
     connectWifi();
 
+#ifdef DEVICE_SCALE
     scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
     //scale.set_gain(128);
     //scale.power_up();
 
-    pinMode(PIR_PIN, INPUT);
-
     Scale *s = new Scale();
     s->debug = true;
     sensors.push_back(s);
+#endif
+
+#ifdef DEVICE_PIR
+    pinMode(PIR_PIN, INPUT);
 
     PIR *p = new PIR();
     sensors.push_back(p);
+#endif
 
-    //DS18B20.begin();
-    //nSensors = DS18B20.getDS18Count();
+#ifdef DEVICE_DS18B20
+    DS18B20.begin();
+    int nThermSensors = DS18B20.getDS18Count();
+    Serial.printf("Found %i DS18B20 sensors\n", nThermSensors);
 
-    /*
-    Serial.println(String("found ") + String(nSensors) + " DS18B20 sensors:");
-    for(uint8_t i=0; i<nSensors; i++) {
-        bool ret = DS18B20.getAddress(addr[i], i);
-        if(ret)
-        Serial.println(String("addr: ") + genAddressString(addr[i]));
+    for (uint8_t i = 0; i < nThermSensors; i++) {
+        DeviceAddress addr;
+        bool ret = DS18B20.getAddress(addr, i);
+        if (ret)
+            Serial.println(String("addr: ") + genAddressString(addr));
         else
-        Serial.println("failure");
+            Serial.println("failure");
+
+        Thermal *t = new Thermal(addr);
+        sensors.push_back(t);
     }
-    */
+#endif
 
     // connect with server and say hi
     sayHello();
@@ -175,11 +215,13 @@ void setup() {
 // reset
 void doOTAupdate()
 {
-    WiFiClient client;
-    if (client.connect(server, 80))
+    WiFiClientSecure client;
+    client.setFingerprint(ssl_fingerprint);
+
+    if (client.connect(server, 443))
     {
         Serial.println("Connected to server for update");
-        t_httpUpdate_return ret = ESPhttpUpdate.update(client, server, 80, "/static/sensor.bin", "optional current version string here");
+        t_httpUpdate_return ret = ESPhttpUpdate.update(client, server, 443, "/static/sensor.bin", "optional current version string here");
         int err = ESPhttpUpdate.getLastError();
         String errStr = ESPhttpUpdate.getLastErrorString();
         Serial.println(errStr + " " + String(err));
@@ -203,6 +245,7 @@ void doOTAupdate()
 int totalCount = 0;
 void loop() {
 
+    DS18B20.requestTemperatures();
     for(auto &s : sensors) {
         s->DoMeasure();
     }
@@ -212,6 +255,7 @@ void loop() {
     if(++cntReading >= 60) {
         cntReading = 0;
 
+        Serial.println("Sending JSON");
         sendJSON(build_full_json());
 
         for(auto &s : sensors) {
@@ -296,6 +340,13 @@ void sayHello()
     DynamicJsonDocument  doc(2000);
     doc["chip"] = msg;
     doc["version"] = MY_VERSION;
+    JsonArray sens = doc.createNestedArray("sensors");
+
+    for(auto &s : sensors) {
+        JsonObject obj = sens.createNestedObject();
+        obj["type"] = s->name;
+        obj["id"] = s->id;
+    }
 
     String postStr;
     serializeJson(doc, postStr);
@@ -303,9 +354,9 @@ void sayHello()
     WiFiClient client;
     HttpClient http = HttpClient(client, server, 80);
     http.post("/hello", "application/json", postStr);
-    client.stop();
 
     String response = http.responseBody();
+    Serial.println(response);
 
     DynamicJsonDocument serverJson(256);
     DeserializationError ret = deserializeJson(serverJson, response);
@@ -318,6 +369,8 @@ void sayHello()
     // on the server, so we can decide whether to update
     int version = sinfo["fwversion"];
     Serial.println("Server has version " + String(version));
+
+    client.stop();
 
     if(version > MY_VERSION) {
         Serial.println("Server has version " + String(version) + ".  Doing update.");
